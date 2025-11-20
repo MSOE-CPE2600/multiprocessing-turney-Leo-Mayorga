@@ -1,3 +1,9 @@
+/*************************************
+* Course: CPE 2600 112
+* Filename: jpegrw.h
+* Author: Leo Mayorga
+* Date: 11/19/25
+*/
 #ifndef JPEGRW_H
 #define JPEGRW_H
 

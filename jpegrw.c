@@ -1,11 +1,12 @@
-/// 
-//  jpegrw.c
-//  Based on example code found here:
-//  https://www.tspi.at/2020/03/20/libjpegexample.html
-//
-//  Minor changes made to some types.
-//  Compile with -ljpeg
-///
+/*************************************
+* Course: CPE 2600 112
+* Filename: jpegrw.c
+* Description: Based on example code found her: https://www.tspi.at/2020/03/20/libjpegexample.html
+* Author: Leo Mayorga
+* Date: 11/19/25
+* Compile with -ljpeg
+*/
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <jpeglib.h>    
