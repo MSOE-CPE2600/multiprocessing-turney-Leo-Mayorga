@@ -7,7 +7,7 @@
 * Author: Leo Mayorga
 * Date: 11/19/25
 * Compile: make
-* Run: ./mandel -p <number of processes>
+* Run: ./mandel -p <number of processes> -t <number of threads>
 */
 
 #include <stdlib.h>
@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <pthread.h>
 #include "jpegrw.h"
 
 #define NUM_FRAMES 50
@@ -23,11 +24,27 @@
 // local routines
 static int iteration_to_color( int i, int max );
 static int iterations_at_point( double x, double y, int max );
+
+// struct for thread data
+typedef struct 
+{
+	imgRawImage *img;	// shared image buffer
+	double xmin;		// left boundary
+	double xmax;		// right boundary 
+	double ymin;		// bottom boundary 
+	double ymax;		// top boundary
+	int max;			// max interations per pixel
+	int y_start;		// starting row
+	int y_end;			// ending row
+} ThreadArgs;
+
 static void compute_image( imgRawImage *img, double xmin, double xmax,
-									double ymin, double ymax, int max );
+									double ymin, double ymax, int max, int num_threads);
 static void show_help();
 static double scale_for_frame(double start_scale, int frame);
+static void *thread_func(void *args);
 
+// calculate the zoom scale 
 static double scale_for_frame(double start_scale, int frame)
 {
 	double result = start_scale;
@@ -52,11 +69,13 @@ int main( int argc, char *argv[] )
 
 	// number of children processes 
 	int num_procs = 0;
+	// number of threads per image 
+	int num_threads = 1;
 
 	// For each command line argument given,
 	// override the appropriate configuration value.
 
-	while((c = getopt(argc,argv,"x:y:s:W:H:m:p:h"))!=-1) {
+	while((c = getopt(argc,argv,"x:y:s:W:H:m:p:t:h"))!=-1) {
 		switch(c) 
 		{
 			case 'x':
@@ -80,6 +99,9 @@ int main( int argc, char *argv[] )
 			case 'p':
 				num_procs = atoi(optarg);
 				break;
+			case 't':
+				num_threads = atoi(optarg);
+				break;
 			case 'h':
 				show_help();
 				exit(1);
@@ -97,8 +119,18 @@ int main( int argc, char *argv[] )
 		num_procs = NUM_FRAMES;
 	}
 
-	printf("mandel: center=(%lf,%lf) start_scale=%lf max=%d, frames=%d, procs=%d\n", xcenter, ycenter,
-		xscale, max, NUM_FRAMES, num_procs);
+	// 1-20 possible threads
+	if (num_threads < 1)
+	{
+		num_threads = 1;
+	}
+	if (num_threads > 20)
+	{
+		num_threads = 20;
+	}
+
+	printf("mandel: center=(%lf,%lf) start_scale=%lf max=%d, frames=%d, procs=%d, threads=%d\n", xcenter, ycenter,
+		xscale, max, NUM_FRAMES, num_procs, num_threads);
 
 	int frame = 0;
 	int running = 0;
@@ -132,7 +164,7 @@ int main( int argc, char *argv[] )
 				// Mandel image for each frame's zoom level and region
 				// xmin, xmax, ymin, ymax
 				compute_image(img, xcenter - xscale_frame/2, xcenter + xscale_frame/2, 
-					ycenter - yscale_frame/2, ycenter + yscale_frame/2, max);
+					ycenter - yscale_frame/2, ycenter + yscale_frame/2, max, num_threads);
 				// store the generated image to a JPEG file
 				storeJpegImageFile(img, fname);
 				// free the image buffer 
@@ -173,7 +205,7 @@ Return the number of iterations at point x, y
 in the Mandelbrot space, up to a maximum of max.
 */
 
-int iterations_at_point( double x, double y, int max )
+static int iterations_at_point( double x, double y, int max )
 {
 	double x0 = x;
 	double y0 = y;
@@ -194,35 +226,130 @@ int iterations_at_point( double x, double y, int max )
 	return iter;
 }
 
+// each thread renders a different horizontal are of rows
+static void *thread_func(void *arg)
+{
+	ThreadArgs *t = (ThreadArgs *)arg;
+	imgRawImage *img = t -> img;
+	int width = img -> width;
+	int height = img -> height;
+
+	// loop over the thread's assigned rows
+	for(int j = t->y_start; j < t -> y_end; j++)
+	{
+		// row j to a y coordinate in the complex plane
+		double y = t->ymin + j * (t->ymax - t->ymin) / height;
+
+		// loop over all of the columns in this row
+		for (int i = 0; i < width; i++)
+		{
+			// column i to an x corrdinate
+			double x = t->xmin + i * (t->xmax - t->xmin) / width;
+			// calculate mandle iterations for this specific point
+			int iters = iterations_at_point(x, y, t->max);
+			// convert iteration count to a color and set the pixel 
+			setPixelCOLOR(img, i, j, iteration_to_color(iters, t->max));
+		}
+	}
+	return NULL;
+}
+
 /*
 Compute an entire Mandelbrot image, writing each point to the given bitmap.
 Scale the image to the range (xmin-xmax,ymin-ymax), limiting iterations to "max"
 */
-
-void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, double ymax, int max )
+static void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, double ymax, int max, int num_threads)
 {
-	int i,j;
-
 	int width = img->width;
 	int height = img->height;
 
-	// For every pixel in the image...
-
-	for(j=0;j<height;j++) {
-
-		for(i=0;i<width;i++) {
-
-			// Determine the point in x,y space for that pixel.
-			double x = xmin + i*(xmax-xmin)/width;
-			double y = ymin + j*(ymax-ymin)/height;
-
-			// Compute the iterations at that point.
-			int iters = iterations_at_point(x,y,max);
-
-			// Set the pixel in the bitmap.
-			setPixelCOLOR(img,i,j,iteration_to_color(iters,max));
-		}
+	// make sure the entered thread count is valid
+	if (num_threads < 1)
+	{
+		num_threads = 1;
 	}
+	if (num_threads > 20)
+	{
+		num_threads = 20;
+	}
+	if (num_threads > height)
+	{
+		// cannot have more threads than rows
+		num_threads = height;
+	}
+
+	// single thread
+	if (num_threads == 1)
+	{
+		for (int j = 0; j < height; j++)
+		{
+			double y = ymin + j * (ymax - ymin) / height;
+			for (int i = 0; i < width; i++)
+			{
+				double x = xmin + i * (xmax - xmin) / width;
+				int iters = iterations_at_point(x, y, max);
+				setPixelCOLOR(img, i, j, iteration_to_color(iters, max));
+			}
+		}
+		return;
+	}
+
+	// miltiple threads 
+	pthread_t *threads = malloc(sizeof(pthread_t) * num_threads);
+	ThreadArgs *args = malloc(sizeof(ThreadArgs) * num_threads);
+
+	if (!threads || !args)
+	{
+		// if allocation fails
+		if (threads) free(threads);
+		if (args) free(args);
+
+		for (int j = 0; j < height; j++)
+		{
+			double y = ymin + j * (ymax - ymin) / height;
+			for (int i = 0; i < width; i++)
+			{
+				double x = xmin + i * (xmax - xmin) / width;
+				int iters = iterations_at_point(x, y, max);
+				setPixelCOLOR(img, i, j, iteration_to_color(iters, max));
+			}
+		}
+		return;
+	}
+
+	// divide the image into rows as evenly as possible
+	int rows_per_thread = height / num_threads;
+	int extra = height %  num_threads;	// distribute the remaining rows per thread
+
+	int current_row = 0;
+
+	// create threads
+	for (int t = 0; t < num_threads; t++)
+	{
+		int this_rows = rows_per_thread + (t < extra ? 1 : 0);
+
+		args[t].img = img;
+		args[t].xmin = xmin;
+		args[t].xmax = xmax;
+		args[t].ymin = ymin;
+		args[t].ymax = ymax;
+		args[t].max = max;
+		args[t].y_start = current_row;				// starting row for this thread
+		args[t].y_end = current_row + this_rows;	// one past the last row
+
+		current_row = args[t].y_end;
+		// lunch thread to render
+		pthread_create(&threads[t], NULL, thread_func, &args[t]);
+	}
+
+	// wait for all of the threads to finish
+	for (int t = 0; t < num_threads; t++)
+	{
+		pthread_join(threads[t], NULL);
+	}
+
+	free(threads);
+	free(args);
 }
 
 
@@ -231,7 +358,7 @@ Convert a iteration number to a color.
 Here, we just scale to gray with a maximum of imax.
 Modify this function to make more interesting colors.
 */
-int iteration_to_color( int iters, int max )
+static int iteration_to_color( int iters, int max )
 {
 	int color = 0xFFFFFF*iters/(double)max;
 	return color;
@@ -243,14 +370,16 @@ void show_help()
 {
 	printf("Use: mandel [options]\n");
 	printf("Where options are:\n");
-	printf("-m <max>    The maximum number of iterations per point. (default=1000)\n");
-	printf("-x <coord>  X coordinate of image center point. (default=0)\n");
-	printf("-y <coord>  Y coordinate of image center point. (default=0)\n");
-	printf("-s <scale>  Scale of the image in Mandlebrot coordinates (X-axis). (default=4)\n");
-	printf("-W <pixels> Width of the image in pixels. (default=1000)\n");
-	printf("-H <pixels> Height of the image in pixels. (default=1000)\n");
-	printf("-o <file>   Set output file. (default=mandel.bmp)\n");
-	printf("-h          Show this help text.\n");
+	printf("-m <max>    	The maximum number of iterations per point. (default=1000)\n");
+	printf("-x <coord>  	X coordinate of image center point. (default=0)\n");
+	printf("-y <coord>  	Y coordinate of image center point. (default=0)\n");
+	printf("-s <scale>  	Scale of the image in Mandlebrot coordinates (X-axis). (default=4)\n");
+	printf("-W <pixels> 	Width of the image in pixels. (default=1000)\n");
+	printf("-H <pixels> 	Height of the image in pixels. (default=1000)\n");
+	printf("-p <procs> 		Number of child processes to use\n");
+	printf("-t <threads>	Number of threads per image (1-20)\n");
+	printf("-o <file>   	Set output file. (default=mandel.bmp)\n");
+	printf("-h          	Show this help text.\n");
 	printf("\nSome examples are:\n");
 	printf("mandel -x -0.5 -y -0.5 -s 0.2\n");
 	printf("mandel -x -.38 -y -.665 -s .05 -m 100\n");
