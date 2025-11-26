@@ -10,6 +10,24 @@ Date: 11/23/24
 
 Each frame is rendered as a JPEG file. All of the frames are then put together to create a video using ffmpeg.
 
+### Runtime Table
+
+| Processes | Threads | Runtime (sec) |
+|-----------|---------|---------------|
+| 1         | 1       | 337.631       |
+| 1         | 2       | 178.533       |
+| 1         | 4       | 102.304       |
+| 2         | 1       | 167.135       |
+| 2         | 2       | 94.688        |
+| 2         | 4       | 62.203        |
+| 3         | 1       | 117.133       |
+| 3         | 2       | 69.7          |
+| 3         | 4       | 44.54         |
+| 4         | 1       | 96.201        |
+| 4         | 2       | 55.046        |
+| 4         | 4       | 50.041        |
+
+
 ### Runtime Results
 ![alt text](<Runtime vs. Threads for Various Process Counts-1.png>)
 
